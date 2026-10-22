@@ -12,6 +12,7 @@
 #include "agent_core.h"
 #include "agent_loop.h"
 #include "agent_stats.h"
+#include "agent_status.h"
 #include "buf.h"
 #include "catalog.h"
 #include "compact.h"
@@ -24,6 +25,7 @@
 #include "system/clock.h"
 #include "terminal/ansi.h"
 #include "terminal/interrupt.h"
+#include "terminal/program_status.h"
 #include "tools/bash_process.h"
 
 /* 128 + SIGINT, the shell convention for an interrupted command. */
@@ -571,8 +573,10 @@ int oneshot_run(struct provider *provider, const char *prompt, const struct hax_
         .json = options->json,
     };
 
+    program_status_report(stderr, PROGRAM_STATUS_WORKING);
     if (start_run(&state, prompt, options) != 0) {
         oneshot_state_destroy(&state);
+        program_status_report(stderr, PROGRAM_STATUS_ERROR);
         return 1;
     }
 
@@ -602,7 +606,10 @@ int oneshot_run(struct provider *provider, const char *prompt, const struct hax_
     signal(SIGUSR1, SIG_IGN);
 
     int result = finish_run(&state, &loop_result, max_turns);
+    enum program_status status =
+        agent_status_after_turn(loop_result.outcome, interrupt_abort_requested(), result != 0);
     agent_loop_result_destroy(&loop_result);
     oneshot_state_destroy(&state);
+    program_status_report(stderr, status);
     return result;
 }

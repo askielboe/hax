@@ -12,6 +12,7 @@
 #include "agent_dispatch.h"
 #include "agent_loop.h"
 #include "agent_stats.h"
+#include "agent_status.h"
 #include "banner.h"
 #include "catalog.h"
 #include "compact.h"
@@ -41,6 +42,7 @@
 #include "terminal/input_core.h"
 #include "terminal/interrupt.h"
 #include "terminal/notify.h"
+#include "terminal/program_status.h"
 #include "terminal/theme.h"
 #include "terminal/ui.h"
 #include "terminal/vt_resolve.h"
@@ -86,6 +88,7 @@ static int reasoning_visible(void)
 void agent_display_refresh(struct agent_state *state)
 {
     theme_init();
+    program_status_refresh(stdout);
     struct render_ctx *render = state->render;
     render->show_reasoning = reasoning_visible();
     if (render->md) {
@@ -493,23 +496,6 @@ static void finalize_tasks(struct agent_state *state)
     agent_finalize_tasks(state->session, state->transcript, state->session_log);
 }
 
-void agent_new_conversation(struct agent_state *state)
-{
-    finalize_tasks(state);
-    clear_resume_state(state);
-    agent_session_reset(state->session);
-    transcript_log_reset(state->transcript, state->session->system_prompt, state->session->tools,
-                         state->session->n_tools);
-    session_log_reset(state->session_log);
-    /* Old-turn temporary files are unreachable after history is reset. Must follow the task
-     * shutdown: unlinking a live task's advertised spool would leave its log path dangling. */
-    tempfiles_cleanup();
-    /* finalize_tasks' stop note consumed the dispatcher's separator; restore the blank line
-     * before the banner (a no-op when nothing was printed). */
-    disp_block_separator(&state->render->disp);
-    banner_print(state->provider, state->session);
-}
-
 /* A pause or turn limit leaves no trace in the conversation, so only the prompt names it; an
  * interruption or provider error is already explained above. The prompt carries the empty-send
  * meaning, so slash-command output cannot scroll it away. */
@@ -597,6 +583,33 @@ static void replay_user_turn(struct render_ctx *render, const struct agent_sessi
         display_stats_line(render, provider, session, session->last_user_turn_ms);
 }
 
+static void present_conversation(struct agent_state *state, const char *heading, int show_stats)
+{
+    if (heading)
+        replay_user_turn(state->render, state->session, heading,
+                         show_stats ? state->provider : NULL);
+    else
+        banner_print(state->provider, state->session);
+    program_status_report(stdout, PROGRAM_STATUS_IDLE);
+}
+
+void agent_new_conversation(struct agent_state *state)
+{
+    finalize_tasks(state);
+    clear_resume_state(state);
+    agent_session_reset(state->session);
+    transcript_log_reset(state->transcript, state->session->system_prompt, state->session->tools,
+                         state->session->n_tools);
+    session_log_reset(state->session_log);
+    /* Old-turn temporary files are unreachable after history is reset. Must follow the task
+     * shutdown: unlinking a live task's advertised spool would leave its log path dangling. */
+    tempfiles_cleanup();
+    /* finalize_tasks' stop note consumed the dispatcher's separator; restore the blank line
+     * before the banner (a no-op when nothing was printed). */
+    disp_block_separator(&state->render->disp);
+    present_conversation(state, NULL, 0);
+}
+
 void agent_resume_session(struct agent_state *state, const char *path)
 {
     /* Claim activity before reading; another process may run the daily sweep concurrently. */
@@ -632,7 +645,7 @@ void agent_resume_session(struct agent_state *state, const char *path)
                                   &resumed);
     session_loaded_free(&loaded);
     apply_resumed(state, &resumed);
-    replay_user_turn(state->render, session, "resumed", state->provider);
+    present_conversation(state, "resumed", 1);
 }
 
 static int turn_item_index(const struct agent_session *session, size_t turn_index,
@@ -694,7 +707,7 @@ static void reshape_after_cut(struct agent_state *state, size_t cut_index, size_
                          session->n_tools);
     transcript_log_append(state->transcript, session->items, session->n_items);
     /* Cleanup is all-or-nothing, and the retained prefix may still reference tracked files. */
-    replay_user_turn(state->render, session, heading, NULL);
+    present_conversation(state, heading, 0);
 }
 
 void agent_undo(struct agent_state *state, size_t turn_index)
@@ -837,6 +850,8 @@ static int compact_conversation(struct agent_state *state, const char *instructi
         return 0;
     }
 
+    if (!automatic)
+        program_status_report(stdout, PROGRAM_STATUS_WORKING);
     render_set_mode(render, RENDER_IDLE);
     /* Before the status row shows, so it never paints another label first, nor a pause left from
      * an earlier turn. */
@@ -899,6 +914,8 @@ static int compact_conversation(struct agent_state *state, const char *instructi
             compact_notice(render, "nothing to compact");
         break;
     }
+    if (!automatic)
+        program_status_report(stdout, PROGRAM_STATUS_IDLE);
     compact_result_destroy(&result);
     return compacted;
 }
@@ -1056,8 +1073,6 @@ int agent_run(struct provider **provider_io, const struct hax_opts *options)
         agent_session_adopt(&session, &loaded);
     }
 
-    putchar('\n');
-    banner_print(current_provider, &session);
     /* The embedded disp outlives its Markdown callback; spinner and Markdown handles are owned
      * by this frame. */
     struct render_ctx render = {.disp = {.sink = stdout, .committed_newlines = 1},
@@ -1075,17 +1090,21 @@ int agent_run(struct provider **provider_io, const struct hax_opts *options)
                                 .provider = current_provider,
                                 .transcript = transcript,
                                 .render = &render};
+    putchar('\n');
     if (options->resume_path) {
+        banner_print(current_provider, &session);
         struct agent_resumed resumed;
         agent_session_prepare_resumed(&session, current_provider, options->resume_path,
                                       &loaded.meta, transcript, &resumed);
         session_loaded_free(&loaded);
         apply_resumed(&state, &resumed);
-        replay_user_turn(&render, &session, "resumed", current_provider);
-    } else if (recording_enabled) {
-        state.session_log =
-            session_log_open(agent_provider_log_name(current_provider), session.model,
-                             session.model_label, session.effort, config_str("preset"));
+        present_conversation(&state, "resumed", 1);
+    } else {
+        present_conversation(&state, NULL, 0);
+        if (recording_enabled)
+            state.session_log =
+                session_log_open(agent_provider_log_name(current_provider), session.model,
+                                 session.model_label, session.effort, config_str("preset"));
     }
     struct input *input = input_new();
     /* Prompt recall is scoped like sessions and remains readable when recording is disabled. */
@@ -1161,6 +1180,7 @@ int agent_run(struct provider **provider_io, const struct hax_opts *options)
             continue;
         }
 
+        program_status_report(stdout, PROGRAM_STATUS_WORKING);
         /* Settle deferred compaction before appending steering input or sending another oversized
          * request. */
         if (state.compaction_deferred) {
@@ -1168,6 +1188,7 @@ int agent_run(struct provider **provider_io, const struct hax_opts *options)
             /* A newly latched interrupt belongs to compaction and cancels the whole send; retain
              * the debt for the next attempt. */
             if (interrupt_abort_requested() || interrupt_pause_requested()) {
+                program_status_report(stdout, PROGRAM_STATUS_IDLE);
                 free(line);
                 continue;
             }
@@ -1260,8 +1281,9 @@ int agent_run(struct provider **provider_io, const struct hax_opts *options)
         struct agent_loop_result loop_result;
         agent_loop_run(&loop_params, &loop_result);
         user_turn_context_tokens = loop_result.last_context_tokens;
-        user_turn_errored = loop_result.outcome == AGENT_LOOP_PROVIDER_ERROR;
-        int user_turn_complete = loop_result.outcome == AGENT_LOOP_COMPLETE;
+        enum agent_loop_outcome outcome = loop_result.outcome;
+        user_turn_errored = outcome == AGENT_LOOP_PROVIDER_ERROR;
+        int user_turn_complete = outcome == AGENT_LOOP_COMPLETE;
         set_resume_state(&state, &loop_result);
         agent_loop_result_destroy(&loop_result);
         interrupt_disarm();
@@ -1296,6 +1318,10 @@ int agent_run(struct provider **provider_io, const struct hax_opts *options)
                 state.compaction_deferred = 1;
         }
 
+        int cancelled =
+            user_pressed_escape || interrupt_abort_requested() || interrupt_pause_requested();
+        program_status_report(stdout, agent_status_after_turn(outcome, cancelled, 0));
+
         /* Esc means the user is already present; otherwise notify when the REPL becomes idle,
          * including errors and max-turn pauses. */
         if (!user_pressed_escape)
@@ -1319,5 +1345,6 @@ int agent_run(struct provider **provider_io, const struct hax_opts *options)
     session_log_close(state.session_log);
     free(state.pending_preseed);
     agent_session_free(&session);
+    program_status_report(stdout, PROGRAM_STATUS_IDLE);
     return 0;
 }

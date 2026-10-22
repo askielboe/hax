@@ -71,6 +71,9 @@ static const struct config_setting REGISTRY[] = {
      .description = "Desktop-notification style: auto, bel, osc9, off "
                     "(auto detects from the terminal)",
      .choices = "auto|bel|osc9|off", .editable = 1},
+    {.key = "program_status", .env_var = "HAX_PROGRAM_STATUS", .default_value = "auto",
+     .description = "OSC 7501 program-state reporting: auto (detects Rex) or off",
+     .choices = "auto|off", .editable = 1},
     {.key = "theme", .env_var = "HAX_THEME", .default_value = "auto",
      .description = "Color theme: auto, dark, light, ansi, off (auto detects from the terminal)",
      .choices = "auto|dark|light|ansi|off", .editable = 1},

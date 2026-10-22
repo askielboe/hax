@@ -239,6 +239,7 @@ provider-dependent.
 | `context_limit` | `HAX_CONTEXT_LIMIT` | auto | Override the model context-window size used for display and compaction. |
 | `display_width` | `HAX_DISPLAY_WIDTH` | `auto` | `auto`, `terminal`, or an exact width of at least 20 columns. |
 | `notify` | `HAX_NOTIFY` | `auto` | Completion notification: `auto`, `bel`, `osc9`, or `off`. |
+| `program_status` | `HAX_PROGRAM_STATUS` | `auto` | OSC 7501 program-state reporting: `auto` (detects Rex) or `off`. |
 | `theme` | `HAX_THEME` | `auto` | `auto`, `dark`, `light`, `ansi`, or `off`. |
 | `tint` | `HAX_TINT` | `teal` | Model-output tint: `teal`, `violet`, `rose`, or `sage`. |
 | `keep_awake` | `HAX_KEEP_AWAKE` | on | Best-effort idle-sleep inhibition while a turn runs. |
@@ -249,6 +250,12 @@ provider-dependent.
 `theme=auto` respects `NO_COLOR`, terminal color support, and `COLORFGBG` when available. Terminals
 rarely report a light background reliably, so set `light` explicitly if auto detection is wrong.
 `theme=ansi` uses the terminal's own 16-color palette; identity tints apply only to dark/light themes.
+
+`program_status=auto` reports program state through
+[OSC 7501](https://www.superlogical.com/rex/docs/build/program-status) when `TERM_PROGRAM=rex`,
+the output is a TTY, and `TERM` is not `dumb`; tmux and GNU screen disable reporting. Reports use
+stdout in the REPL and stderr in one-shot mode, including `--json`. Completion notifications remain
+independent; set `notify=off` to avoid duplicates if your terminal also notifies on status reports.
 
 ### Recording
 

@@ -666,6 +666,11 @@ static void test_registry_introspection(void)
     const struct config_setting *show_reasoning = config_setting_find("show_reasoning");
     EXPECT(show_reasoning != NULL && show_reasoning->editable);
     EXPECT_STR_EQ(show_reasoning->choices, CONFIG_CHOICES_BOOL);
+    const struct config_setting *program_status = config_setting_find("program_status");
+    EXPECT(program_status != NULL && program_status->editable);
+    EXPECT_STR_EQ(program_status->env_var, "HAX_PROGRAM_STATUS");
+    EXPECT_STR_EQ(program_status->default_value, "auto");
+    EXPECT_STR_EQ(program_status->choices, "auto|off");
     EXPECT(config_setting_find("nonesuch") == NULL);
     EXPECT(config_setting_find("providers.openai-compatible.base_url") != NULL);
     EXPECT(!config_setting_find("providers.openai-compatible.base_url")->editable);
@@ -894,6 +899,12 @@ static void test_choice_value_validation(void)
     EXPECT(!config_value_valid(theme, "dar"));
     EXPECT(!config_value_valid(theme, "darker"));
     EXPECT(!config_value_valid(theme, ""));
+
+    const struct config_setting *program_status = config_setting_find("program_status");
+    EXPECT(config_value_valid(program_status, "auto"));
+    EXPECT(config_value_valid(program_status, "OFF"));
+    EXPECT(!config_value_valid(program_status, "on"));
+    EXPECT(!config_value_valid(program_status, ""));
 }
 
 /* Only an explicit on/off spelling decides; auto, unset, and junk all defer to the consumer. */

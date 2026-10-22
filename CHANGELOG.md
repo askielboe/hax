@@ -7,6 +7,14 @@ notes (see [docs/releasing.md](docs/releasing.md)).
 
 ## [Unreleased]
 
+### Added
+
+- Rex shows hax's program status: idle, working, completed, failed, or waiting to continue after
+  a turn limit. Reporting is disabled under tmux and GNU screen. Disable it elsewhere with
+  `program_status=off` or `HAX_PROGRAM_STATUS=off`. Disabling it at runtime sends idle once only
+  if the last reported state was non-idle. Completion notifications remain independent; use
+  `notify=off` to avoid duplicates if your terminal also notifies on status reports.
+
 ### Changed
 
 - Prompts are sent without leading blank lines or trailing whitespace, so a paste or Ctrl+G edit
