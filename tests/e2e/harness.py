@@ -319,7 +319,9 @@ class Terminal:
 
     The server's socket lives in a scratch directory and the server is killed at exit, so
     scenarios never touch the developer's tmux sessions or each other. Terminals may share a
-    home/workdir pair, e.g. to resume a session an earlier run recorded.
+    home/workdir pair, e.g. to resume a session an earlier run recorded. extra_env configures the
+    server environment; pane_env overrides variables after tmux sets its terminal environment.
+    Use unset_env to remove pane variables, e.g. TMUX to simulate a direct terminal.
     """
 
     def __init__(
@@ -330,6 +332,9 @@ class Terminal:
         workdir: Path | None = None,
         extra_env: dict[str, str] | None = None,
         size: tuple[int, int] = (80, 24),
+        stdout_path: Path | None = None,
+        unset_env: tuple[str, ...] = (),
+        pane_env: dict[str, str] | None = None,
     ):
         tmux = shutil.which("tmux")
         if tmux is None:
@@ -364,7 +369,14 @@ class Terminal:
             stderr=subprocess.DEVNULL,
         )
         columns, rows = size
-        command = shlex.join([str(hax_binary()), *(args or [])])
+        command_args = [str(hax_binary()), *(args or [])]
+        if unset_env or pane_env:
+            removals = [arg for key in unset_env for arg in ("-u", key)]
+            overrides = [f"{key}={value}" for key, value in (pane_env or {}).items()]
+            command_args = ["env", *removals, *overrides, *command_args]
+        command = shlex.join(command_args)
+        if stdout_path is not None:
+            command += " > " + shlex.quote(str(stdout_path))
         # -N: until the server listens, fail rather than start a daemonized one in its place.
         new_session = [*self._tmux, "-N", "new-session", "-d", "-s", "hax"]
         new_session += ["-x", str(columns), "-y", str(rows), "-c", str(workdir), command]
@@ -422,9 +434,20 @@ class Terminal:
         finally:
             os.close(fd)
 
+    def record_output(self, path: Path) -> None:
+        """Record subsequent raw pane output, including nonprinting escape sequences."""
+        self._run("pipe-pane", "-t", "hax", "cat > " + shlex.quote(str(path)))
+
     def screen(self, styles: bool = False) -> str:
         """The visible rows; `styles` keeps the SGR sequences that color and dim them."""
         return self._run("capture-pane", "-p", "-t", "hax", *(["-e"] if styles else []))
+
+    def wait_until(self, predicate: Callable[[], bool], timeout: float = 10) -> None:
+        """Wait until `predicate()` is true, e.g. for output recorded outside the screen.
+        Fail if hax exits, settles waiting for input, or reaches `timeout` first."""
+        _, stopped = self._poll(lambda _screen, _pane: predicate(), timeout)
+        if stopped:
+            self._fail(f"condition not met: {stopped}")
 
     def wait_for(self, text: str, timeout: float = 10) -> None:
         """Wait until `text` appears anywhere on screen."""
